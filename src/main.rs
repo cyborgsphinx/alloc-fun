@@ -1,7 +1,7 @@
-use alloc_fun::null::NullAlloc;
+use alloc_fun::bump::BumpAlloc;
 
 #[global_allocator]
-static ALLOC: NullAlloc = NullAlloc::new();
+static ALLOC: BumpAlloc = BumpAlloc::new();
 
 fn main() {
     println!("Hello, world!");
