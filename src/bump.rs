@@ -47,3 +47,55 @@ unsafe impl GlobalAlloc for BumpAlloc {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bump_allocates() {
+        let bump = BumpAlloc::new();
+        let layout = Layout::from_size_align(10, 4).unwrap();
+        unsafe {
+            let bytes = bump.alloc(layout);
+            assert!(!bytes.is_null());
+        }
+    }
+
+    #[test]
+    fn bump_provides_distinct_allocations() {
+        let bump = BumpAlloc::new();
+        let layout = Layout::from_size_align(10, 4).unwrap();
+        unsafe {
+            let bytes_1 = bump.alloc(layout);
+            let bytes_2 = bump.alloc(layout);
+            assert!(!ptr::eq(bytes_1, bytes_2));
+        }
+    }
+
+    #[test]
+    fn bump_holds_allocations() {
+        let bump = BumpAlloc::new();
+        let layout = Layout::from_size_align(10, 4).unwrap();
+        unsafe {
+            // used to ensure the allocator doesn't clear allocated memory
+            let _bytes_0 = bump.alloc(layout);
+            let bytes_1 = bump.alloc(layout);
+            bump.dealloc(bytes_1, layout);
+            let bytes_2 = bump.alloc(layout);
+            assert!(!ptr::eq(bytes_1, bytes_2));
+        }
+    }
+
+    #[test]
+    fn bump_frees_allocations() {
+        let bump = BumpAlloc::new();
+        let layout = Layout::from_size_align(10, 4).unwrap();
+        unsafe {
+            let bytes_1 = bump.alloc(layout);
+            bump.dealloc(bytes_1, layout);
+            let bytes_2 = bump.alloc(layout);
+            assert!(ptr::eq(bytes_1, bytes_2));
+        }
+    }
+}

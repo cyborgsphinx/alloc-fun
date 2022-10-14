@@ -1,3 +1,5 @@
+#![cfg(not(test))]
+
 use alloc_fun::bump::BumpAlloc;
 
 #[global_allocator]
