@@ -98,4 +98,35 @@ mod tests {
             assert!(ptr::eq(bytes_1, bytes_2));
         }
     }
+
+    // this must be a static to be shared across threads
+    static BUMP: BumpAlloc = BumpAlloc::new();
+
+    #[test]
+    fn bump_may_be_thread_safe() {
+        let layout = Layout::from_size_align(10, 4).unwrap();
+        let mut handles = vec![];
+        for _ in 0..100 {
+            let layout = layout.clone();
+            let handle = std::thread::spawn(move || {
+                unsafe {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    let bytes = BUMP.alloc(layout);
+                    bytes as usize
+                }
+            });
+            handles.push(handle);
+        }
+
+        let mut values = vec![];
+        for handle in handles {
+            values.push(handle.join().expect("A thread panicked"));
+        }
+
+        for i in 0..100 {
+            for j in (i+1)..100 {
+                assert_ne!(values[i], values[j]);
+            }
+        }
+    }
 }
