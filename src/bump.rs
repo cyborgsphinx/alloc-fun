@@ -27,17 +27,21 @@ unsafe impl Sync for BumpAlloc {}
 unsafe impl GlobalAlloc for BumpAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let size = layout.pad_to_align().size();
-        let remaining = self.next.load(Ordering::SeqCst);
-        if remaining < size {
+
+        let mut start = 0;
+        if self.next.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |mut remaining| {
+            if remaining < size {
+                return None;
+            }
+            remaining -= size;
+            start = remaining;
+            Some(remaining)
+        }).is_err() {
             return ptr::null_mut();
         }
 
-        // this also serves as the start pointer since we're allocating from the end
-        let remaining_after_alloc = remaining - size;
-        self.next.store(remaining_after_alloc, Ordering::SeqCst);
         self.allocations.fetch_add(1, Ordering::SeqCst);
-
-        (self.arena.get() as *mut u8).add(remaining_after_alloc)
+        (self.arena.get() as *mut u8).add(start)
     }
 
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
