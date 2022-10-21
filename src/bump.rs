@@ -131,27 +131,27 @@ mod tests {
         }
     }
 
-    static BUMP2: BumpAlloc::<DEFAULT_SIZE> = BumpAlloc::new();
-
     #[test]
     fn bump_may_maintain_allocations() {
+        let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
-        let mut bytes = unsafe { BUMP2.alloc(layout) } as usize;
+        let mut bytes = unsafe { bump.alloc(layout) } as usize;
         for _ in 0..100 {
-            let layout1 = layout.clone();
-            let layout2 = layout.clone();
-            let dealloc = std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                unsafe { BUMP2.dealloc(bytes as *mut u8, layout1) };
+            bytes = std::thread::scope(|scope| {
+                let dealloc = scope.spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    unsafe { bump.dealloc(bytes as *mut u8, layout) };
+                });
+                let alloc = scope.spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    let bytes = unsafe { bump.alloc(layout) };
+                    bytes as usize
+                });
+                let bytes = alloc.join().expect("Allocation failed");
+                let _ = dealloc.join().expect("Deallocation failed");
+                bytes
             });
-            let alloc = std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                let bytes = unsafe { BUMP2.alloc(layout2) };
-                bytes as usize
-            });
-            bytes = alloc.join().expect("Allocation failed");
-            let _ = dealloc.join().expect("Deallocation failed");
-            assert_eq!(BUMP2.num_allocated(), 1);
+            assert_eq!(bump.num_allocated(), 1);
         }
     }
 }
