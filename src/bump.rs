@@ -24,6 +24,11 @@ impl<const SIZE: usize> BumpAlloc<SIZE> {
     fn num_allocated(&self) -> usize {
         self.allocations.load(Ordering::SeqCst)
     }
+
+    #[cfg(test)]
+    fn is_clear(&self) -> bool {
+        self.next.load(Ordering::SeqCst) == SIZE
+    }
 }
 
 // trust me
@@ -138,7 +143,7 @@ mod tests {
         let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
         let mut bytes = unsafe { bump.alloc(layout) } as usize;
-        for _ in 0..100 {
+        for _ in 0..1000 {
             bytes = std::thread::scope(|scope| {
                 let dealloc = scope.spawn(|| {
                     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -154,6 +159,7 @@ mod tests {
                 bytes
             });
             assert_eq!(bump.num_allocated(), 1);
+            assert!(!bump.is_clear());
         }
     }
 }
