@@ -19,6 +19,11 @@ impl<const SIZE: usize> BumpAlloc<SIZE> {
             allocations: AtomicUsize::new(0),
         }
     }
+
+    #[cfg(test)]
+    fn num_allocated(&self) -> usize {
+        self.allocations.load(Ordering::SeqCst)
+    }
 }
 
 // trust me
@@ -44,6 +49,8 @@ unsafe impl<const SIZE: usize> GlobalAlloc for BumpAlloc<SIZE> {
         (self.arena.get() as *mut u8).add(start)
     }
 
+    // concern: we can enter a state where space is allocated and then the next pointer is reset.
+    // this would allow us to hand out the same memory twice. which is bad.
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
         self.allocations.fetch_sub(1, Ordering::SeqCst);
         if self.allocations.load(Ordering::SeqCst) == 0 {
@@ -104,7 +111,7 @@ mod tests {
     }
 
     // this must be a static to be shared across threads
-    static BUMP: BumpAlloc::<DEFAULT_SIZE> = BumpAlloc::new();
+    static BUMP1: BumpAlloc::<DEFAULT_SIZE> = BumpAlloc::new();
 
     #[test]
     fn bump_may_be_thread_safe() {
@@ -115,7 +122,7 @@ mod tests {
             let handle = std::thread::spawn(move || {
                 unsafe {
                     std::thread::sleep(std::time::Duration::from_millis(10));
-                    let bytes = BUMP.alloc(layout);
+                    let bytes = BUMP1.alloc(layout);
                     bytes as usize
                 }
             });
@@ -131,6 +138,29 @@ mod tests {
             for j in (i+1)..100 {
                 assert_ne!(values[i], values[j]);
             }
+        }
+    }
+
+    static BUMP2: BumpAlloc::<DEFAULT_SIZE> = BumpAlloc::new();
+
+    #[test]
+    fn bump_may_maintain_allocations() {
+        let layout = Layout::from_size_align(10, 4).unwrap();
+        let mut bytes = unsafe { BUMP2.alloc(layout) } as usize;
+        for _ in 0..100 {
+            let layout1 = layout.clone();
+            let layout2 = layout.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                unsafe { BUMP2.dealloc(bytes as *mut u8, layout1) };
+            });
+            let handle = std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                let bytes = unsafe { BUMP2.alloc(layout2) };
+                bytes as usize
+            });
+            bytes = handle.join().expect("Allocation failed");
+            assert_ne!(BUMP2.num_allocated(), 0);
         }
     }
 }
