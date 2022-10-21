@@ -67,47 +67,39 @@ mod tests {
     fn bump_allocates() {
         let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
-        unsafe {
-            let bytes = bump.alloc(layout);
-            assert!(!bytes.is_null());
-        }
+        let bytes = unsafe { bump.alloc(layout) };
+        assert!(!bytes.is_null());
     }
 
     #[test]
     fn bump_provides_distinct_allocations() {
         let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
-        unsafe {
-            let bytes_1 = bump.alloc(layout);
-            let bytes_2 = bump.alloc(layout);
-            assert!(!ptr::eq(bytes_1, bytes_2));
-        }
+        let bytes_1 = unsafe { bump.alloc(layout) };
+        let bytes_2 = unsafe { bump.alloc(layout) };
+        assert!(!ptr::eq(bytes_1, bytes_2));
     }
 
     #[test]
     fn bump_holds_allocations() {
         let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
-        unsafe {
-            // used to ensure the allocator doesn't clear allocated memory
-            let _bytes_0 = bump.alloc(layout);
-            let bytes_1 = bump.alloc(layout);
-            bump.dealloc(bytes_1, layout);
-            let bytes_2 = bump.alloc(layout);
-            assert!(!ptr::eq(bytes_1, bytes_2));
-        }
+        // used to ensure the allocator doesn't clear allocated memory
+        let _bytes_0 = unsafe { bump.alloc(layout) };
+        let bytes_1 = unsafe { bump.alloc(layout) };
+        unsafe { bump.dealloc(bytes_1, layout) };
+        let bytes_2 = unsafe { bump.alloc(layout) };
+        assert!(!ptr::eq(bytes_1, bytes_2));
     }
 
     #[test]
     fn bump_frees_allocations() {
         let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
-        unsafe {
-            let bytes_1 = bump.alloc(layout);
-            bump.dealloc(bytes_1, layout);
-            let bytes_2 = bump.alloc(layout);
-            assert!(ptr::eq(bytes_1, bytes_2));
-        }
+        let bytes_1 = unsafe { bump.alloc(layout) };
+        unsafe { bump.dealloc(bytes_1, layout) };
+        let bytes_2 = unsafe { bump.alloc(layout) };
+        assert!(ptr::eq(bytes_1, bytes_2));
     }
 
     // this must be a static to be shared across threads
@@ -120,11 +112,9 @@ mod tests {
         for _ in 0..100 {
             let layout = layout.clone();
             let handle = std::thread::spawn(move || {
-                unsafe {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                    let bytes = BUMP1.alloc(layout);
-                    bytes as usize
-                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                let bytes = unsafe { BUMP1.alloc(layout) };
+                bytes as usize
             });
             handles.push(handle);
         }
