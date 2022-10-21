@@ -124,9 +124,11 @@ mod tests {
             values
         });
 
-        for i in 0..100 {
-            for j in (i+1)..100 {
-                assert_ne!(values[i], values[j]);
+        for (i, value_i) in values.iter().enumerate() {
+            for (j, value_j) in values.iter().enumerate() {
+                if i != j {
+                    assert_ne!(value_i, value_j);
+                }
             }
         }
     }
