@@ -3,28 +3,28 @@ use std::cell::UnsafeCell;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const ARENA_SIZE: usize = 128 * 1024;
+pub const DEFAULT_SIZE: usize = 128 * 1024;
 
-pub struct BumpAlloc {
-    arena: UnsafeCell<[u8; ARENA_SIZE]>,
+pub struct BumpAlloc<const SIZE: usize> {
+    arena: UnsafeCell<[u8; SIZE]>,
     next: AtomicUsize,
     allocations: AtomicUsize,
 }
 
-impl BumpAlloc {
+impl<const SIZE: usize> BumpAlloc<SIZE> {
     pub const fn new() -> Self {
         Self {
-            arena: UnsafeCell::new([0x00; ARENA_SIZE]),
-            next: AtomicUsize::new(ARENA_SIZE),
+            arena: UnsafeCell::new([0x00; SIZE]),
+            next: AtomicUsize::new(SIZE),
             allocations: AtomicUsize::new(0),
         }
     }
 }
 
 // trust me
-unsafe impl Sync for BumpAlloc {}
+unsafe impl<const SIZE: usize> Sync for BumpAlloc<SIZE> {}
 
-unsafe impl GlobalAlloc for BumpAlloc {
+unsafe impl<const SIZE: usize> GlobalAlloc for BumpAlloc<SIZE> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let size = layout.pad_to_align().size();
 
@@ -47,7 +47,7 @@ unsafe impl GlobalAlloc for BumpAlloc {
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
         self.allocations.fetch_sub(1, Ordering::SeqCst);
         if self.allocations.load(Ordering::SeqCst) == 0 {
-            self.next.store(ARENA_SIZE, Ordering::SeqCst);
+            self.next.store(SIZE, Ordering::SeqCst);
         }
     }
 }
@@ -58,7 +58,7 @@ mod tests {
 
     #[test]
     fn bump_allocates() {
-        let bump = BumpAlloc::new();
+        let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
         unsafe {
             let bytes = bump.alloc(layout);
@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn bump_provides_distinct_allocations() {
-        let bump = BumpAlloc::new();
+        let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
         unsafe {
             let bytes_1 = bump.alloc(layout);
@@ -79,7 +79,7 @@ mod tests {
 
     #[test]
     fn bump_holds_allocations() {
-        let bump = BumpAlloc::new();
+        let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
         unsafe {
             // used to ensure the allocator doesn't clear allocated memory
@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn bump_frees_allocations() {
-        let bump = BumpAlloc::new();
+        let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
         unsafe {
             let bytes_1 = bump.alloc(layout);
@@ -104,7 +104,7 @@ mod tests {
     }
 
     // this must be a static to be shared across threads
-    static BUMP: BumpAlloc = BumpAlloc::new();
+    static BUMP: BumpAlloc::<DEFAULT_SIZE> = BumpAlloc::new();
 
     #[test]
     fn bump_may_be_thread_safe() {
