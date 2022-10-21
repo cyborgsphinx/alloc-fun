@@ -140,17 +140,18 @@ mod tests {
         for _ in 0..100 {
             let layout1 = layout.clone();
             let layout2 = layout.clone();
-            std::thread::spawn(move || {
+            let dealloc = std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 unsafe { BUMP2.dealloc(bytes as *mut u8, layout1) };
             });
-            let handle = std::thread::spawn(move || {
+            let alloc = std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 let bytes = unsafe { BUMP2.alloc(layout2) };
                 bytes as usize
             });
-            bytes = handle.join().expect("Allocation failed");
-            assert_ne!(BUMP2.num_allocated(), 0);
+            bytes = alloc.join().expect("Allocation failed");
+            let _ = dealloc.join().expect("Deallocation failed");
+            assert_eq!(BUMP2.num_allocated(), 1);
         }
     }
 }
