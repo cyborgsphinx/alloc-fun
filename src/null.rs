@@ -25,7 +25,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn null_does_not_allocate() {
+    fn does_not_allocate() {
         let null = NullAlloc::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
         unsafe {

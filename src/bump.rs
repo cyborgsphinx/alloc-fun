@@ -1,65 +1,75 @@
 use std::alloc::{GlobalAlloc, Layout};
 use std::cell::UnsafeCell;
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 pub const DEFAULT_SIZE: usize = 128 * 1024;
 
 pub struct BumpAlloc<const SIZE: usize> {
     arena: UnsafeCell<[u8; SIZE]>,
-    next: AtomicUsize,
-    allocations: AtomicUsize,
+    details: Mutex<BumpImpl>, // use of a mutex may not be ideal, but it makes handling changes to two values easier
 }
 
 impl<const SIZE: usize> BumpAlloc<SIZE> {
     pub const fn new() -> Self {
         Self {
             arena: UnsafeCell::new([0x00; SIZE]),
-            next: AtomicUsize::new(SIZE),
-            allocations: AtomicUsize::new(0),
+            details: Mutex::new(BumpImpl::new()),
         }
     }
 
     #[cfg(test)]
     fn num_allocated(&self) -> usize {
-        self.allocations.load(Ordering::SeqCst)
+        self.details.lock().unwrap().allocations
     }
 
     #[cfg(test)]
     fn is_clear(&self) -> bool {
-        self.next.load(Ordering::SeqCst) == SIZE
+        self.details.lock().unwrap().next == 0
     }
 }
 
-// trust me
+// we're handing out non-overlapping chunks of the arena, and the rest is mutex-guarded
 unsafe impl<const SIZE: usize> Sync for BumpAlloc<SIZE> {}
 
 unsafe impl<const SIZE: usize> GlobalAlloc for BumpAlloc<SIZE> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let size = layout.pad_to_align().size();
-
-        let mut start = 0;
-        if self.next.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |mut remaining| {
-            if remaining < size {
-                return None;
+        if let Ok(mut details) = self.details.lock() {
+            let size = layout.pad_to_align().size();
+            if details.next + size > SIZE {
+                return ptr::null_mut();
             }
-            remaining -= size;
-            start = remaining;
-            Some(remaining)
-        }).is_err() {
-            return ptr::null_mut();
+            let start = details.next;
+            details.next += size;
+            details.allocations += 1;
+            (self.arena.get() as *mut u8).add(start)
+        } else {
+            ptr::null_mut()
         }
-
-        self.allocations.fetch_add(1, Ordering::SeqCst);
-        (self.arena.get() as *mut u8).add(start)
     }
 
     // concern: we can enter a state where space is allocated and then the next pointer is reset.
     // this would allow us to hand out the same memory twice. which is bad.
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
-        self.allocations.fetch_sub(1, Ordering::SeqCst);
-        if self.allocations.load(Ordering::SeqCst) == 0 {
-            self.next.store(SIZE, Ordering::SeqCst);
+        if let Ok(mut details) = self.details.lock() {
+            details.allocations -= 1;
+            if details.allocations == 0 {
+                details.next = 0;
+            }
+        }
+    }
+}
+
+struct BumpImpl {
+    next: usize,
+    allocations: usize,
+}
+
+impl BumpImpl {
+    const fn new() -> Self {
+        Self {
+            next: 0,
+            allocations: 0,
         }
     }
 }
@@ -69,7 +79,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bump_allocates() {
+    fn allocates() {
         let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
         let bytes = unsafe { bump.alloc(layout) };
@@ -77,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn bump_provides_distinct_allocations() {
+    fn provides_distinct_allocations() {
         let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
         let bytes_1 = unsafe { bump.alloc(layout) };
@@ -86,7 +96,7 @@ mod tests {
     }
 
     #[test]
-    fn bump_holds_allocations() {
+    fn holds_allocations() {
         let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
         // used to ensure the allocator doesn't clear allocated memory
@@ -98,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn bump_frees_allocations() {
+    fn frees_allocations() {
         let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
         let bytes_1 = unsafe { bump.alloc(layout) };
@@ -108,7 +118,7 @@ mod tests {
     }
 
     #[test]
-    fn bump_may_be_thread_safe() {
+    fn may_be_thread_safe() {
         let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
         let values = std::thread::scope(|scope| {
@@ -138,8 +148,11 @@ mod tests {
         }
     }
 
+    // ignoring due to how long it takes to run in successful cases
+    // run this test to check for alloc/dealloc contention
+    #[ignore]
     #[test]
-    fn bump_may_maintain_allocations() {
+    fn may_maintain_allocations() {
         let bump = BumpAlloc::<DEFAULT_SIZE>::new();
         let layout = Layout::from_size_align(10, 4).unwrap();
         let mut bytes = unsafe { bump.alloc(layout) } as usize;
@@ -160,6 +173,40 @@ mod tests {
             });
             assert_eq!(bump.num_allocated(), 1);
             assert!(!bump.is_clear());
+        }
+    }
+
+    #[test]
+    fn may_fail_to_allocate() {
+        let bump = BumpAlloc::<0>::new();
+        let layout = Layout::from_size_align(10, 4).unwrap();
+        let bytes = unsafe { bump.alloc(layout) };
+        assert!(bytes.is_null());
+    }
+
+    #[test]
+    fn begins_cleared() {
+        let bump = BumpAlloc::<DEFAULT_SIZE>::new();
+        assert!(bump.is_clear());
+    }
+
+    #[test]
+    fn begins_with_no_allocations() {
+        let bump = BumpAlloc::<DEFAULT_SIZE>::new();
+        assert_eq!(bump.num_allocated(), 0);
+    }
+
+    #[test]
+    fn hands_out_non_overlapping_chunks() {
+        let bump = BumpAlloc::<DEFAULT_SIZE>::new();
+        let layout = Layout::from_size_align(8, 4).unwrap();
+        unsafe {
+            let bytes = bump.alloc(layout);
+            let more_bytes = bump.alloc(layout);
+            ptr::write_bytes(more_bytes, 0xff, 8);
+            ptr::write_bytes(bytes, 0x00, 8);
+            let byte = ptr::read(more_bytes);
+            assert!(byte == 0xff);
         }
     }
 }
