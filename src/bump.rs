@@ -50,7 +50,7 @@ unsafe impl<const SIZE: usize> GlobalAlloc for BumpAlloc<SIZE> {
 
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
         if let Ok(mut details) = self.details.lock() {
-            details.allocations -= 1;
+            details.allocations = details.allocations.saturating_sub(1);
             if details.allocations == 0 {
                 details.next = 0;
             }
@@ -206,5 +206,12 @@ mod tests {
             let byte = ptr::read(more_bytes);
             assert!(byte == 0xff);
         }
+    }
+
+    #[test]
+    fn behaves_properly_when_dealloc_called_first() {
+        let bump = BumpAlloc::<DEFAULT_SIZE>::new();
+        let layout = Layout::from_size_align(10, 4).unwrap();
+        unsafe { bump.dealloc(ptr::null_mut(), layout) };
     }
 }
