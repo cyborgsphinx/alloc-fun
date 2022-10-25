@@ -48,8 +48,6 @@ unsafe impl<const SIZE: usize> GlobalAlloc for BumpAlloc<SIZE> {
         }
     }
 
-    // concern: we can enter a state where space is allocated and then the next pointer is reset.
-    // this would allow us to hand out the same memory twice. which is bad.
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
         if let Ok(mut details) = self.details.lock() {
             details.allocations -= 1;
