@@ -2,10 +2,10 @@
 
 use std::boxed::Box;
 
-use alloc_fun::bump::{BumpAlloc, DEFAULT_SIZE};
+use alloc_fun::freelist::{FreeListAlloc, DEFAULT_SIZE};
 
 #[global_allocator]
-static ALLOC: BumpAlloc<DEFAULT_SIZE> = BumpAlloc::new();
+static ALLOC: FreeListAlloc<DEFAULT_SIZE> = FreeListAlloc::new();
 
 fn main() {
     let mut outer = Box::new(0);

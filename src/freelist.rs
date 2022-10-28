@@ -15,6 +15,16 @@ impl<const SIZE: usize> FreeListAlloc<SIZE> {
             details: Mutex::new(FreeListImpl::<SIZE>::new()),
         }
     }
+
+    #[cfg(test)]
+    fn free_list_length(&self) -> usize {
+        self.details.lock().unwrap().free_list_length()
+    }
+
+    #[cfg(test)]
+    fn free_space(&self) -> usize {
+        self.details.lock().unwrap().free_space()
+    }
 }
 
 unsafe impl<const SIZE: usize> GlobalAlloc for FreeListAlloc<SIZE> {
@@ -47,17 +57,16 @@ impl ListNode {
         self as *const Self as usize
     }
 
-    fn end_addr(&self) -> usize {
-        self.start_addr() + self.size
-    }
-
     fn suitable_for(&self, size: usize) -> bool {
         // check that the size at this node is enough for the allocation request
+        if size > self.size {
+            return false;
+        }
         // also check free memory after allocation location for capability to fit a new ListNode
         // either there is no free space left, in which case we don't need to add a new node,
         // or we must fit a new node into the remaining space so that we don't lose track of it
         let excess = self.size - size;
-        size <= self.size && (excess == 0 || excess >= mem::size_of::<ListNode>())
+        excess == 0 || excess >= mem::size_of::<ListNode>()
     }
 }
 
@@ -75,6 +84,32 @@ impl<const SIZE: usize> FreeListImpl<SIZE> {
             arena: [0x00; SIZE],
             head: None,
         }
+    }
+
+    #[cfg(test)]
+    fn free_list_length(&self) -> usize {
+        let mut length = 0;
+        if let Some(ref head) = self.head {
+            let mut current = head;
+            while let Some(ref node) = current.next {
+                length += 1;
+                current = node;
+            }
+        }
+        length
+    }
+
+    #[cfg(test)]
+    fn free_space(&self) -> usize {
+        let mut space = 0;
+        if let Some(ref head) = self.head {
+            let mut current = head;
+            while let Some(ref node) = current.next {
+                space += node.size;
+                current = node;
+            }
+        }
+        space
     }
 
     fn find_region(&mut self, size: usize) -> Option<&'static mut ListNode> {
@@ -136,8 +171,13 @@ impl<const SIZE: usize> FreeListImpl<SIZE> {
         let size = Self::adjust_layout(layout).pad_to_align().size();
         if let Some(node) = self.find_region(size) {
             let alloc_start = node as *mut ListNode;
+            assert_eq!(alloc_start as usize, node.start_addr());
+            assert!(node.size >= size);
             let alloc_end = alloc_start.add(size);
-            let excess = node.end_addr() as usize - alloc_end as usize;
+            //if alloc_end as usize > node.end_addr() as usize {
+            //    return ptr::null_mut();
+            //}
+            let excess = node.size - size;
             if excess > 0 {
                 self.add_free_region(alloc_end as *mut u8, excess);
             }
@@ -160,6 +200,7 @@ mod tests {
     #[test]
     fn begins_with_no_head() {
         let alloc = FreeListImpl::<DEFAULT_SIZE>::new();
+        assert_eq!(alloc.free_list_length(), 0);
         assert!(alloc.head.is_none());
     }
 
@@ -171,7 +212,31 @@ mod tests {
             let start = alloc.arena.as_mut_ptr();
             alloc.add_free_region(start, DEFAULT_SIZE);
         }
+        assert_eq!(alloc.free_list_length(), 1);
+        assert_eq!(alloc.free_space(), DEFAULT_SIZE);
         assert!(alloc.head.unwrap().next.is_some());
+    }
+
+    #[test]
+    fn allocates_correct_size() {
+        let alloc = FreeListAlloc::<DEFAULT_SIZE>::new();
+        let layout = Layout::from_size_align(10, 4).unwrap();
+        let true_size = FreeListImpl::<DEFAULT_SIZE>::adjust_layout(layout)
+            .pad_to_align()
+            .size();
+        let _bytes = unsafe { alloc.alloc(layout) };
+        assert_eq!(alloc.free_space(), DEFAULT_SIZE - true_size);
+    }
+
+    #[test]
+    fn can_allocate_more_than_list_node_size() {
+        let alloc = FreeListAlloc::<DEFAULT_SIZE>::new();
+        let layout = Layout::from_size_align(256, 4).unwrap();
+        let true_size = FreeListImpl::<DEFAULT_SIZE>::adjust_layout(layout)
+            .pad_to_align()
+            .size();
+        let _bytes = unsafe { alloc.alloc(layout) };
+        assert_eq!(alloc.free_space(), DEFAULT_SIZE - true_size);
     }
 
     #[test]
@@ -191,5 +256,35 @@ mod tests {
         let layout = Layout::from_size_align(10, 4).unwrap();
         let bytes = unsafe { alloc.alloc(layout) };
         unsafe { alloc.dealloc(bytes, layout) };
+        assert_eq!(alloc.free_space(), DEFAULT_SIZE);
+    }
+
+    #[test]
+    fn repeated_alloc_and_dealloc_keeps_free_list_stable() {
+        let alloc = FreeListAlloc::<DEFAULT_SIZE>::new();
+        let layout = Layout::from_size_align(10, 4).unwrap();
+        for _ in 0..100 {
+            unsafe {
+                let bytes = alloc.alloc(layout);
+                alloc.dealloc(bytes, layout);
+            }
+            assert_eq!(alloc.free_list_length(), 2);
+        }
+    }
+
+    #[test]
+    fn can_skip_values_in_free_list() {
+        let alloc = FreeListAlloc::<DEFAULT_SIZE>::new();
+        let layout1 = Layout::from_size_align(10, 4).unwrap();
+        let layout2 = Layout::from_size_align(256, 4).unwrap();
+        unsafe {
+            let bytes = alloc.alloc(layout1);
+            alloc.dealloc(bytes, layout1);
+            let _bytes = alloc.alloc(layout2);
+        }
+        assert_eq!(
+            alloc.free_space(),
+            DEFAULT_SIZE - layout2.pad_to_align().size()
+        );
     }
 }
