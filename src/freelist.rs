@@ -59,14 +59,15 @@ impl ListNode {
 
     fn suitable_for(&self, size: usize) -> bool {
         // check that the size at this node is enough for the allocation request
-        if size > self.size {
-            return false;
-        }
         // also check free memory after allocation location for capability to fit a new ListNode
         // either there is no free space left, in which case we don't need to add a new node,
         // or we must fit a new node into the remaining space so that we don't lose track of it
-        let excess = self.size - size;
-        excess == 0 || excess >= mem::size_of::<ListNode>()
+        size <= self.size
+            && self
+                .size
+                .checked_sub(size)
+                .map(|excess| excess == 0 || excess >= mem::size_of::<ListNode>())
+                .unwrap_or(false)
     }
 }
 
